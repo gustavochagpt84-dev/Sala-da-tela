@@ -1,0 +1,73 @@
+SALA DA TELA - versão 2
+=======================
+
+Compartilhamento de tela em grupo (até umas 4 ou 5 pessoas), feito com WebRTC.
+
+O QUE MUDOU NA v2
+- Reconexão automática: se a internet piscar ou a pessoa trocar de app no
+  celular, ela volta sozinha para a sala sem "sair" do grupo.
+- O vídeo se recupera sozinho se cair no meio da transmissão.
+- Ping a cada 20 s para o túnel/hospedagem não derrubar conexões paradas.
+- Seletor de qualidade (Leve / Normal / Alta). Use "Leve" quando alguém
+  estiver num celular fraco. Dá para trocar no meio da transmissão.
+- Prefere o codec H.264, que os celulares decodificam por hardware (pesa menos).
+- No celular o botão "Compartilhar tela" fica desativado (o navegador do
+  celular não permite), mas assistir funciona normalmente.
+
+
+=========================================================
+OPÇÃO A - HOSPEDAR DE GRAÇA NO RENDER (não precisa do seu PC ligado)
+=========================================================
+Você faz isso UMA vez. Depois a sala fica num link fixo, tipo
+https://sala-da-tela.onrender.com
+
+1) Colocar os arquivos no GitHub
+   - Crie uma conta em https://github.com
+   - Clique em "+" (canto superior direito) > "New repository"
+   - Nome: sala-da-tela   |   marque "Public"   |   "Create repository"
+   - Clique no link "uploading an existing file"
+   - Arraste para lá: server.js, package.json, package-lock.json,
+     LEIA-ME.txt e a PASTA public (arraste a pasta inteira)
+     (NÃO envie a pasta node_modules)
+   - Clique em "Commit changes"
+
+2) Publicar no Render
+   - Crie uma conta em https://render.com (pode entrar com o GitHub)
+   - "New +" > "Web Service" > escolha o repositório sala-da-tela
+   - Preencha:
+       Language / Runtime: Node
+       Build Command:      npm install
+       Start Command:      npm start
+       Instance Type:      Free
+   - Clique em "Deploy Web Service" e espere ficar "Live"
+   - O link aparece no topo da página (termina em .onrender.com)
+
+COMO FUNCIONA O PLANO GRÁTIS
+- Se ninguém usar a sala por 15 minutos, o servidor "dorme".
+- Quando alguém abrir o link de novo, ele demora ~1 minuto para acordar
+  (aparece uma tela de carregamento do Render). Depois disso, normal.
+- Enquanto a sala estiver sendo usada, ele não dorme.
+
+PARA ATUALIZAR DEPOIS (quando eu te mandar uma versão nova)
+- No GitHub, abra o repositório > "Add file" > "Upload files",
+  arraste os arquivos novos por cima e "Commit changes".
+  O Render atualiza sozinho em alguns minutos.
+
+
+=========================================================
+OPÇÃO B - RODAR NO SEU PC (como na v1)
+=========================================================
+1. Abra o terminal dentro desta pasta
+2. npm install   (só na primeira vez)
+3. npm start
+4. Abra http://localhost:3000
+Para amigos de fora: em outro terminal, cloudflared tunnel --url http://localhost:3000
+
+
+ARQUIVOS
+- server.js          -> servidor que apresenta as pessoas umas às outras
+- public/index.html  -> a página da sala (visual + WebRTC)
+- package.json       -> lista de dependências (só o "ws")
+
+DICA: para o pessoal ouvir o som, compartilhe uma ABA do Chrome
+e marque "Compartilhar áudio da aba".
