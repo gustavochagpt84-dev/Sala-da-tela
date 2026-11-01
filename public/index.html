@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sala da Tela</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, sans-serif;
+    background: #12131a; color: #e8e8f0;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 20px; background: #1b1d27; border-bottom: 1px solid #2a2d3a;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; color: #8b9cff; }
+  #infoSala { font-size: 14px; color: #aab; }
+  button {
+    background: #5865f2; color: white; border: none; border-radius: 8px;
+    padding: 9px 16px; font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secundario { background: #2f3241; }
+  button.perigo { background: #d9434b; }
+  select {
+    background: #2f3241; color: #fff; border: none; border-radius: 8px;
+    padding: 9px 10px; font-size: 14px; cursor: pointer;
+  }
+  input {
+    background: #0e0f15; border: 1px solid #2f3241; color: #fff;
+    border-radius: 8px; padding: 10px; font-size: 15px; width: 100%;
+  }
+  /* Tela de entrada */
+  #entrada {
+    margin: auto; background: #1b1d27; padding: 28px; border-radius: 14px;
+    width: min(380px, 92vw); display: flex; flex-direction: column; gap: 12px;
+  }
+  #entrada h2 { margin: 0 0 6px; }
+  #entrada label { font-size: 13px; color: #aab; }
+  /* Sala */
+  #sala { display: none; flex: 1; gap: 14px; padding: 14px; }
+  #palco {
+    flex: 1; background: #000; border-radius: 12px; position: relative;
+    display: flex; align-items: center; justify-content: center; min-height: 300px;
+  }
+  #palco video { width: 100%; height: 100%; max-height: calc(100vh - 110px); object-fit: contain; border-radius: 12px; }
+  #aviso { color: #778; text-align: center; padding: 20px; }
+  #lateral {
+    width: 230px; background: #1b1d27; border-radius: 12px; padding: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #lateral h3 { margin: 0; font-size: 14px; color: #aab; text-transform: uppercase; }
+  #pessoas { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  #pessoas li { background: #242735; padding: 8px 10px; border-radius: 8px; font-size: 14px; }
+  #pessoas li.transmitindo::after { content: " 🔴"; }
+  #status { font-size: 12px; color: #889; margin-top: auto; }
+  @media (max-width: 700px) {
+    #sala { flex-direction: column; }
+    #lateral { width: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📺 Sala da Tela</h1>
+  <span id="infoSala"></span>
+  <span style="flex:1"></span>
+  <select id="qualidade" style="display:none" title="Qualidade da transmissão (vale para quem compartilha)">
+    <option value="leve">Qualidade: Leve (celular fraco)</option>
+    <option value="normal" selected>Qualidade: Normal</option>
+    <option value="alta">Qualidade: Alta</option>
+  </select>
+  <button id="btnCopiar" class="secundario" style="display:none">Copiar link</button>
+  <button id="btnCompartilhar" style="display:none">Compartilhar tela</button>
+  <button id="btnTelaCheia" class="secundario" style="display:none">Tela cheia</button>
+</header>
+
+<div id="entrada">
+  <h2>Entrar numa sala</h2>
+  <label>Seu nome</label>
+  <input id="campoNome" placeholder="Ex.: Gustavo" maxlength="30">
+  <label>Nome da sala</label>
+  <input id="campoSala" placeholder="Ex.: filme-de-sexta" maxlength="40">
+  <button id="btnEntrar">Entrar</button>
+</div>
+
+<div id="sala">
+  <div id="palco">
+    <div id="aviso">Ninguém está compartilhando a tela ainda.<br>Clique em <b>Compartilhar tela</b> lá em cima para começar.</div>
+    <video id="video" autoplay playsinline style="display:none"></video>
+  </div>
+  <div id="lateral">
+    <h3>Na sala</h3>
+    <ul id="pessoas"></ul>
+    <div id="status">Conectando...</div>
+  </div>
+</div>
+
+<script>
+// ===================== Configuração =====================
+// Servidor STUN gratuito do Google: ajuda os computadores a descobrirem o próprio endereço na internet
+const CONFIG_RTC = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+// Qualidades da transmissão. "Leve" alivia celulares fracos (menos pixels e quadros para decodificar).
+const QUALIDADES = {
+  leve:   { largura: 854,  altura: 480,  fps: 15, bitrate: 700000 },
+  normal: { largura: 1280, altura: 720,  fps: 20, bitrate: 1500000 },
+  alta:   { largura: 1920, altura: 1080, fps: 30, bitrate: 3500000 },
+};
+
+// ===================== Estado =====================
+const meuId = Math.random().toString(36).slice(2) + Date.now().toString(36); // id fixo enquanto a página estiver aberta
+let ws = null;
+let meuNome = "";
+let minhaSala = "";
+let pessoas = new Map();     // id -> nome
+const conexoes = new Map();  // id -> RTCPeerConnection
+const timersQueda = new Map(); // id -> timer de "conexão instável"
+const pendentes = new Map();   // id -> timer de quem está "reconectando" após o servidor reiniciar
+let minhaTela = null;        // MediaStream quando EU estou compartilhando
+let quemTransmite = null;    // id de quem estou assistindo
+let tentativas = 0;          // tentativas seguidas de reconexão
+let timerReconexao = null;
+let ultimoPong = Date.now();
+
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+
+// ===================== Utilidades =====================
+function guardar(chave, valor) {
+  try {
+    if (valor === undefined) return localStorage.getItem(chave);
+    localStorage.setItem(chave, valor);
+  } catch { return null; }
+}
+
+function status(texto) { $("status").textContent = texto; }
+
+function qualidadeAtual() { return QUALIDADES[$("qualidade").value] || QUALIDADES.normal; }
+
+// Preenche os campos com o que já se sabe
+const params = new URLSearchParams(location.search);
+if (params.get("sala")) $("campoSala").value = params.get("sala");
+$("campoNome").value = guardar("nome") || "";
+if (guardar("qualidade")) $("qualidade").value = guardar("qualidade");
+
+// ===================== Entrar na sala =====================
+$("btnEntrar").onclick = entrar;
+$("campoSala").onkeydown = (e) => { if (e.key === "Enter") entrar(); };
+
+function entrar() {
+  meuNome = $("campoNome").value.trim() || "Anônimo";
+  minhaSala = ($("campoSala").value.trim() || "geral").toLowerCase().replace(/\s+/g, "-");
+  guardar("nome", meuNome);
+  history.replaceState(null, "", "?sala=" + encodeURIComponent(minhaSala));
+
+  $("entrada").style.display = "none";
+  $("sala").style.display = "flex";
+  ["qualidade", "btnCopiar", "btnCompartilhar", "btnTelaCheia"].forEach((b) => ($(b).style.display = ""));
+  $("infoSala").textContent = "Sala: " + minhaSala;
+  desenharPessoas();
+  conectar();
+}
+
+// ===================== Conexão com o servidor (com reconexão) =====================
+function conectar() {
+  clearTimeout(timerReconexao);
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+
+  const protocolo = location.protocol === "https:" ? "wss://" : "ws://";
+  const este = new WebSocket(protocolo + location.host);
+  ws = este;
+
+  este.onopen = () => {
+    tentativas = 0;
+    ultimoPong = Date.now();
+    enviar({ type: "entrar", id: meuId, sala: minhaSala, nome: meuNome, compartilhando: !!minhaTela });
+    status("Conectado ✔");
+  };
+  este.onmessage = (e) => tratarMensagem(JSON.parse(e.data));
+  este.onclose = () => {
+    if (ws !== este) return; // conexão antiga, ignorar
+    status("Conexão caiu, reconectando...");
+    // Espera 1s, 2s, 4s, 8s... (no máximo 8s) entre as tentativas
+    const espera = Math.min(1000 * 2 ** tentativas, 8000);
+    tentativas++;
+    timerReconexao = setTimeout(conectar, espera);
+  };
+}
+
+function enviar(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// "Ping" a cada 20s: mantém a conexão viva (o túnel derruba conexões paradas)
+// e percebe quando a conexão morreu sem avisar.
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (Date.now() - ultimoPong > 50000) { ws.close(); return; } // não responde há muito tempo
+  enviar({ type: "ping" });
+}, 20000);
+
+// Quando a pessoa volta para a aba (ex.: saiu do Discord), reconecta na hora se precisar
+function voltarAgora() {
+  if (!meuNome) return;
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    tentativas = 0;
+    conectar();
+  }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") voltarAgora(); });
+window.addEventListener("online", voltarAgora);
+
+// Ao fechar a aba, avisa que saiu de verdade (para não ficar "fantasma" na lista)
+window.addEventListener("pagehide", () => enviar({ type: "sair" }));
+
+// ===================== Mensagens do servidor =====================
+async function tratarMensagem(msg) {
+  switch (msg.type) {
+    case "pong":
+      ultimoPong = Date.now();
+      break;
+
+    case "bem-vindo": {
+      const novas = new Map(msg.pessoas.map((p) => [p.id, p.nome]));
+      for (const [id, nome] of pessoas) {
+        if (novas.has(id)) continue;
+        if (conexaoBoa(id)) {
+          // Ainda não apareceu no servidor, mas o vídeo direto com ela está funcionando:
+          // provavelmente só está reconectando (ex.: o servidor reiniciou). Espera um pouco.
+          novas.set(id, nome);
+          clearTimeout(pendentes.get(id));
+          pendentes.set(id, setTimeout(() => {
+            pendentes.delete(id);
+            tratarMensagem({ type: "saiu", id });
+          }, 30000));
+        } else {
+          fecharConexao(id);
+          if (quemTransmite === id) pararDeAssistir();
+        }
+      }
+      pessoas = novas;
+      desenharPessoas();
+
+      if (minhaTela) {
+        // Eu transmito: mando a tela para quem ainda não está recebendo
+        for (const id of pessoas.keys()) if (!conexaoBoa(id)) enviarTelaPara(id);
+      } else if (msg.transmissor && msg.transmissor !== meuId && !conexaoBoa(msg.transmissor)) {
+        // Alguém transmite e eu não estou recebendo: peço a tela
+        pedirTela(msg.transmissor);
+      }
+      break;
+    }
+
+    case "entrou":
+      clearTimeout(pendentes.get(msg.id));
+      pendentes.delete(msg.id);
+      pessoas.set(msg.id, msg.nome);
+      desenharPessoas();
+      // Se a pessoa só reconectou e o vídeo com ela continua bom, não precisa refazer
+      if (minhaTela && !conexaoBoa(msg.id)) enviarTelaPara(msg.id);
+      break;
+
+    case "saiu":
+      pessoas.delete(msg.id);
+      fecharConexao(msg.id);
+      if (quemTransmite === msg.id) pararDeAssistir();
+      desenharPessoas();
+      break;
+
+    case "sinal":
+      await tratarSinal(msg.de, msg.dados);
+      break;
+
+    case "aviso":
+      if (msg.dados.parou && quemTransmite === msg.de) {
+        fecharConexao(msg.de);
+        pararDeAssistir();
+      }
+      break;
+  }
+}
+
+// ===================== WebRTC =====================
+function conexaoBoa(id) {
+  const pc = conexoes.get(id);
+  return !!pc && ["new", "connecting", "connected"].includes(pc.connectionState);
+}
+
+function pedirTela(idTransmissor) {
+  mostrarAviso("Conectando à transmissão...");
+  enviar({ type: "sinal", para: idTransmissor, dados: { pedir: true } });
+}
+
+function criarConexao(idPessoa, souTransmissor) {
+  const pc = new RTCPeerConnection(CONFIG_RTC);
+  pc.onicecandidate = (e) => {
+    if (e.candidate) enviar({ type: "sinal", para: idPessoa, dados: { candidato: e.candidate } });
+  };
+
+  // Vigia a conexão de vídeo: se cair, tenta recuperar sozinho
+  pc.onconnectionstatechange = () => {
+    if (conexoes.get(idPessoa) !== pc) return; // conexão antiga
+    const estado = pc.connectionState;
+    clearTimeout(timersQueda.get(idPessoa));
+
+    if (estado === "connected") {
+      if (!souTransmissor) mostrarVideo(true);
+    } else if (estado === "disconnected") {
+      // Às vezes volta sozinha; espera 5s antes de refazer
+      timersQueda.set(idPessoa, setTimeout(() => {
+        if (conexoes.get(idPessoa) === pc && pc.connectionState !== "connected") recuperar(idPessoa, souTransmissor);
+      }, 5000));
+    } else if (estado === "failed") {
+      recuperar(idPessoa, souTransmissor);
+    }
+  };
+
+  conexoes.set(idPessoa, pc);
+  return pc;
+}
+
+function recuperar(idPessoa, souTransmissor) {
+  if (!pessoas.has(idPessoa)) return;
+  if (souTransmissor && minhaTela) enviarTelaPara(idPessoa);
+  else if (!souTransmissor && quemTransmite === idPessoa) pedirTela(idPessoa);
+}
+
+function fecharConexao(idPessoa) {
+  clearTimeout(timersQueda.get(idPessoa));
+  const pc = conexoes.get(idPessoa);
+  if (pc) { pc.close(); conexoes.delete(idPessoa); }
+}
+
+// ---------- Quem TRANSMITE ----------
+async function enviarTelaPara(idPessoa) {
+  if (!minhaTela) return;
+  fecharConexao(idPessoa);
+  const pc = criarConexao(idPessoa, true);
+  minhaTela.getTracks().forEach((t) => pc.addTrack(t, minhaTela));
+  preferirH264(pc);
+  const oferta = await pc.createOffer();
+  await pc.setLocalDescription(oferta);
+  aplicarLimites(pc);
+  enviar({ type: "sinal", para: idPessoa, dados: { sdp: pc.localDescription } });
+}
+
+// H.264 costuma ter decodificação por hardware nos celulares (gasta menos bateria e processador)
+function preferirH264(pc) {
+  try {
+    const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities("video");
+    if (!caps) return;
+    const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === "video/h264");
+    if (!h264.length) return;
+    const resto = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== "video/h264");
+    for (const t of pc.getTransceivers()) {
+      if (t.sender.track && t.sender.track.kind === "video" && t.setCodecPreferences) {
+        t.setCodecPreferences([...h264, ...resto]);
+      }
+    }
+  } catch {}
+}
+
+// Limita bitrate e FPS de cada envio conforme a qualidade escolhida
+function aplicarLimites(pc) {
+  const q = qualidadeAtual();
+  for (const sender of pc.getSenders()) {
+    if (!sender.track || sender.track.kind !== "video") continue;
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = q.bitrate;
+      p.encodings[0].maxFramerate = q.fps;
+      sender.setParameters(p).catch(() => {});
+    } catch {}
+  }
+}
+
+function restricoesVideo() {
+  const q = qualidadeAtual();
+  return {
+    width: { ideal: q.largura, max: q.largura },
+    height: { ideal: q.altura, max: q.altura },
+    frameRate: { ideal: q.fps, max: q.fps },
+  };
+}
+
+// ---------- Quem ASSISTE ----------
+async function tratarSinal(de, dados) {
+  if (dados.pedir) {
+    // Alguém pediu a minha tela (chegou agora ou perdeu a conexão)
+    if (minhaTela) enviarTelaPara(de);
+    return;
+  }
+  if (dados.sdp && dados.sdp.type === "offer") {
+    fecharConexao(de);
+    const pc = criarConexao(de, false);
+    pc.ontrack = (e) => assistir(de, e.streams[0]);
+    await pc.setRemoteDescription(dados.sdp);
+    const resposta = await pc.createAnswer();
+    await pc.setLocalDescription(resposta);
+    enviar({ type: "sinal", para: de, dados: { sdp: pc.localDescription } });
+  } else if (dados.sdp && dados.sdp.type === "answer") {
+    const pc = conexoes.get(de);
+    if (pc && pc.signalingState === "have-local-offer") await pc.setRemoteDescription(dados.sdp);
+  } else if (dados.candidato) {
+    const pc = conexoes.get(de);
+    if (pc) {
+      try { await pc.addIceCandidate(dados.candidato); } catch {}
+    }
+  }
+}
+
+// ===================== Botões =====================
+$("btnCompartilhar").onclick = async () => {
+  if (minhaTela) return pararDeCompartilhar();
+  try {
+    minhaTela = await navigator.mediaDevices.getDisplayMedia({ video: restricoesVideo(), audio: true });
+  } catch {
+    minhaTela = null;
+    return; // a pessoa cancelou (ou o navegador não permite, como no celular)
+  }
+  const trilha = minhaTela.getVideoTracks()[0];
+  // "motion" = prioriza movimento fluido (bom para filmes e jogos)
+  if ("contentHint" in trilha) trilha.contentHint = "motion";
+  trilha.onended = pararDeCompartilhar; // botão "Parar" da barra do navegador
+
+  pararDeAssistir();
+  video.srcObject = minhaTela;
+  video.muted = true; // não ouvir o próprio áudio (evita eco)
+  mostrarVideo(true);
+  $("btnCompartilhar").textContent = "Parar de compartilhar";
+  $("btnCompartilhar").classList.add("perigo");
+  desenharPessoas();
+
+  enviar({ type: "aviso", dados: { compartilhando: true } });
+  for (const id of pessoas.keys()) enviarTelaPara(id);
+};
+
+if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+  // Celulares não conseguem compartilhar a tela pelo navegador
+  $("btnCompartilhar").disabled = true;
+  $("btnCompartilhar").title = "Este navegador não permite compartilhar a tela (só assistir)";
+  $("btnCompartilhar").style.opacity = 0.5;
+}
+
+function pararDeCompartilhar() {
+  if (!minhaTela) return;
+  minhaTela.getTracks().forEach((t) => t.stop());
+  minhaTela = null;
+  for (const id of [...conexoes.keys()]) fecharConexao(id);
+  enviar({ type: "aviso", dados: { parou: true } });
+  video.srcObject = null;
+  mostrarVideo(false);
+  $("btnCompartilhar").textContent = "Compartilhar tela";
+  $("btnCompartilhar").classList.remove("perigo");
+  desenharPessoas();
+}
+
+// Trocar a qualidade no meio da transmissão
+$("qualidade").onchange = () => {
+  guardar("qualidade", $("qualidade").value);
+  if (!minhaTela) return;
+  const r = restricoesVideo();
+  minhaTela.getVideoTracks()[0].applyConstraints({ width: r.width, height: r.height, frameRate: r.frameRate }).catch(() => {});
+  for (const pc of conexoes.values()) aplicarLimites(pc);
+};
+
+function assistir(de, stream) {
+  if (minhaTela) pararDeCompartilhar(); // outra pessoa começou: eu paro a minha
+  quemTransmite = de;
+  video.muted = false;
+  if (video.srcObject !== stream) video.srcObject = stream;
+  video.play().catch(() => {});
+  mostrarVideo(true);
+  desenharPessoas();
+}
+
+function pararDeAssistir() {
+  if (!quemTransmite) return;
+  quemTransmite = null;
+  video.srcObject = null;
+  mostrarVideo(false);
+  desenharPessoas();
+}
+
+const AVISO_PADRAO = $("aviso").innerHTML;
+function mostrarVideo(sim) {
+  video.style.display = sim ? "" : "none";
+  $("aviso").style.display = sim ? "none" : "";
+  if (!sim) $("aviso").innerHTML = AVISO_PADRAO;
+}
+function mostrarAviso(texto) {
+  video.style.display = "none";
+  $("aviso").style.display = "";
+  $("aviso").textContent = texto;
+}
+
+$("btnCopiar").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(location.href);
+    $("btnCopiar").textContent = "Copiado!";
+  } catch {
+    prompt("Copie o link:", location.href);
+  }
+  setTimeout(() => ($("btnCopiar").textContent = "Copiar link"), 1500);
+};
+
+$("btnTelaCheia").onclick = () => {
+  const palco = $("palco");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (palco.requestFullscreen) palco.requestFullscreen();
+  else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // iPhone
+};
+
+// ===================== Lista de pessoas =====================
+function desenharPessoas() {
+  const lista = $("pessoas");
+  lista.innerHTML = "";
+  const adicionar = (id, nome) => {
+    const li = document.createElement("li");
+    li.textContent = nome;
+    if ((id === meuId && minhaTela) || id === quemTransmite) li.classList.add("transmitindo");
+    lista.appendChild(li);
+  };
+  adicionar(meuId, meuNome + " (você)");
+  for (const [id, nome] of pessoas) adicionar(id, nome);
+}
+</script>
+</body>
+</html>
